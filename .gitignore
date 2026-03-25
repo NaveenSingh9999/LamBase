@@ -1,0 +1,44 @@
+# Node modules
+node_modules/
+frontend/node_modules/
+
+# Frontend output
+frontend/dist/
+dist/
+build/
+*.tsbuildinfo
+
+# Go binaries and build output
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+main
+lambase
+lambase-bootstrap
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# SQLite and local data files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs and temp
+*.log
+tmp/
+temp/
+.cache/
+
+# Editor/system
+.vscode/
+.DS_Store
+*.swp
