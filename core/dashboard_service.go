@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -13,16 +14,24 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/lambase/lambase/config"
+	"github.com/lambase/lambase/db"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
 
 const maxFailedLoginAttempts = 5
 
-type dashboardAuthService struct {
-	cfg *config.Config
-	db  *sql.DB
+const (
+	apiKeyAnon        = "anon"
+	apiKeyServiceRole = "service_role"
+)
+
+type dashboardService struct {
+	cfg       *config.Config
+	db        *sql.DB
+	projectDB *db.ProjectDBManager
 }
 
 type dashboardClaims struct {
@@ -33,27 +42,46 @@ type dashboardClaims struct {
 	jwt.RegisteredClaims
 }
 
-func newDashboardAuthService(cfg *config.Config) (*dashboardAuthService, error) {
-	db, err := sql.Open("sqlite", cfg.DashboardAuthDBPath)
+type organization struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type project struct {
+	ID        string `json:"id"`
+	OrgID     string `json:"orgId"`
+	Name      string `json:"name"`
+	DBName    string `json:"dbName"`
+	CreatedAt string `json:"createdAt"`
+}
+
+type apiKey struct {
+	KeyName  string `json:"keyName"`
+	KeyValue string `json:"keyValue"`
+}
+
+func newDashboardService(cfg *config.Config, projectDB *db.ProjectDBManager) (*dashboardService, error) {
+	dbConn, err := sql.Open("sqlite", cfg.DashboardAuthDBPath)
 	if err != nil {
 		return nil, fmt.Errorf("open dashboard auth db: %w", err)
 	}
 
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;`); err != nil {
-		_ = db.Close()
+	if _, err := dbConn.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;`); err != nil {
+		_ = dbConn.Close()
 		return nil, fmt.Errorf("set sqlite pragmas: %w", err)
 	}
 
-	if err := migrateDashboardAuthDB(db); err != nil {
-		_ = db.Close()
+	if err := migrateDashboardDB(dbConn); err != nil {
+		_ = dbConn.Close()
 		return nil, err
 	}
 
-	return &dashboardAuthService{cfg: cfg, db: db}, nil
+	return &dashboardService{cfg: cfg, db: dbConn, projectDB: projectDB}, nil
 }
 
-func migrateDashboardAuthDB(db *sql.DB) error {
-	_, err := db.Exec(`
+func migrateDashboardDB(dbConn *sql.DB) error {
+	_, err := dbConn.Exec(`
 	CREATE TABLE IF NOT EXISTS dashboard_admins (
 		id TEXT PRIMARY KEY,
 		email TEXT UNIQUE NOT NULL,
@@ -82,20 +110,50 @@ func migrateDashboardAuthDB(db *sql.DB) error {
 		locked_until DATETIME,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS organizations (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS organization_members (
+		id TEXT PRIMARY KEY,
+		org_id TEXT NOT NULL,
+		admin_id TEXT NOT NULL,
+		role TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS projects (
+		id TEXT PRIMARY KEY,
+		org_id TEXT NOT NULL,
+		name TEXT NOT NULL,
+		db_name TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS project_api_keys (
+		id TEXT PRIMARY KEY,
+		project_id TEXT NOT NULL,
+		key_name TEXT NOT NULL,
+		key_value TEXT NOT NULL,
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
 	`)
 	if err != nil {
-		return fmt.Errorf("migrate dashboard auth db: %w", err)
+		return fmt.Errorf("migrate dashboard db: %w", err)
 	}
 	return nil
 }
 
-func (s *dashboardAuthService) close() {
+func (s *dashboardService) close() {
 	if s.db != nil {
 		_ = s.db.Close()
 	}
 }
 
-func (s *dashboardAuthService) registerRoutes(app *fiber.App) {
+func (s *dashboardService) registerAuthRoutes(app *fiber.App) {
 	auth := app.Group("/api/v1/dashboard-auth")
 	auth.Get("/bootstrap", s.handleBootstrap)
 	auth.Post("/setup", s.requireSameOrigin, s.handleSetup)
@@ -104,7 +162,34 @@ func (s *dashboardAuthService) registerRoutes(app *fiber.App) {
 	auth.Post("/signout", s.requireSameOrigin, s.requireDashboardSession, s.requireCSRFFromSession, s.handleSignout)
 }
 
-func (s *dashboardAuthService) requireSameOrigin(c *fiber.Ctx) error {
+func (s *dashboardService) registerOrgRoutes(router fiber.Router) {
+	orgs := router.Group("/orgs")
+	orgs.Get("/", s.listOrganizations)
+	orgs.Post("/", s.createOrganization)
+	orgs.Get(":orgId/projects", s.listProjects)
+	orgs.Post(":orgId/projects", s.createProject)
+}
+
+func (s *dashboardService) registerProjectRoutes(router fiber.Router) {
+	projects := router.Group("/projects")
+	projects.Get(":projectId", s.getProject)
+	projects.Get(":projectId/api-keys", s.getProjectKeys)
+	projects.Get(":projectId/schemas", s.listSchemas)
+	projects.Get(":projectId/schemas/:schema/tables", s.listTables)
+	projects.Post(":projectId/schemas/:schema/tables", s.createTable)
+	projects.Delete(":projectId/schemas/:schema/tables/:table", s.dropTable)
+	projects.Get(":projectId/schemas/:schema/tables/:table/columns", s.listColumns)
+	projects.Get(":projectId/schemas/:schema/tables/:table/relationships", s.listRelationships)
+	projects.Post(":projectId/schemas/:schema/tables/:table/relationships", s.createRelationship)
+	projects.Get(":projectId/db/:schema/:table", s.listRows)
+	projects.Get(":projectId/db/:schema/:table/:id", s.getRow)
+	projects.Post(":projectId/db/:schema/:table", s.insertRow)
+	projects.Patch(":projectId/db/:schema/:table/:id", s.updateRow)
+	projects.Delete(":projectId/db/:schema/:table/:id", s.deleteRow)
+	projects.Post(":projectId/sql", s.runSQL)
+}
+
+func (s *dashboardService) requireSameOrigin(c *fiber.Ctx) error {
 	if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead || c.Method() == fiber.MethodOptions {
 		return c.Next()
 	}
@@ -132,7 +217,7 @@ func (s *dashboardAuthService) requireSameOrigin(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-func (s *dashboardAuthService) requireDashboardSession(c *fiber.Ctx) error {
+func (s *dashboardService) requireDashboardSession(c *fiber.Ctx) error {
 	raw := c.Get("Authorization")
 	if !strings.HasPrefix(raw, "Bearer ") {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication required"})
@@ -184,7 +269,7 @@ func (s *dashboardAuthService) requireDashboardSession(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-func (s *dashboardAuthService) requireCSRFFromSession(c *fiber.Ctx) error {
+func (s *dashboardService) requireCSRFFromSession(c *fiber.Ctx) error {
 	if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead || c.Method() == fiber.MethodOptions {
 		return c.Next()
 	}
@@ -197,7 +282,7 @@ func (s *dashboardAuthService) requireCSRFFromSession(c *fiber.Ctx) error {
 	return c.Next()
 }
 
-func (s *dashboardAuthService) handleBootstrap(c *fiber.Ctx) error {
+func (s *dashboardService) handleBootstrap(c *fiber.Ctx) error {
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(1) FROM dashboard_admins`).Scan(&count); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to check setup status"})
@@ -205,7 +290,7 @@ func (s *dashboardAuthService) handleBootstrap(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"hasAdmin": count > 0})
 }
 
-func (s *dashboardAuthService) handleSetup(c *fiber.Ctx) error {
+func (s *dashboardService) handleSetup(c *fiber.Ctx) error {
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -246,7 +331,7 @@ func (s *dashboardAuthService) handleSetup(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(resp)
 }
 
-func (s *dashboardAuthService) handleSignin(c *fiber.Ctx) error {
+func (s *dashboardService) handleSignin(c *fiber.Ctx) error {
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -294,7 +379,7 @@ func (s *dashboardAuthService) handleSignin(c *fiber.Ctx) error {
 	return c.JSON(resp)
 }
 
-func (s *dashboardAuthService) handleSession(c *fiber.Ctx) error {
+func (s *dashboardService) handleSession(c *fiber.Ctx) error {
 	email, _ := c.Locals("dashboard_admin_email").(string)
 	csrf, _ := c.Locals("dashboard_csrf").(string)
 	return c.JSON(fiber.Map{
@@ -306,7 +391,7 @@ func (s *dashboardAuthService) handleSession(c *fiber.Ctx) error {
 	})
 }
 
-func (s *dashboardAuthService) handleSignout(c *fiber.Ctx) error {
+func (s *dashboardService) handleSignout(c *fiber.Ctx) error {
 	sid, _ := c.Locals("dashboard_session_id").(string)
 	if sid != "" {
 		_, _ = s.db.Exec(`UPDATE dashboard_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`, sid)
@@ -314,7 +399,7 @@ func (s *dashboardAuthService) handleSignout(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"success": true})
 }
 
-func (s *dashboardAuthService) issueSession(adminID, email, ip, userAgent string) (fiber.Map, error) {
+func (s *dashboardService) issueSession(adminID, email, ip, userAgent string) (fiber.Map, error) {
 	sid := randomID(18)
 	csrfToken := randomID(18)
 	expiresAt := time.Now().UTC().Add(time.Duration(s.cfg.DashboardSessionHours) * time.Hour)
@@ -355,7 +440,7 @@ func (s *dashboardAuthService) issueSession(adminID, email, ip, userAgent string
 	}, nil
 }
 
-func (s *dashboardAuthService) isLockedOut(email string) (bool, error) {
+func (s *dashboardService) isLockedOut(email string) (bool, error) {
 	var failedCount int
 	var lockedUntil sql.NullTime
 	err := s.db.QueryRow(`SELECT failed_count, locked_until FROM dashboard_login_attempts WHERE email = ?`, email).Scan(&failedCount, &lockedUntil)
@@ -368,7 +453,7 @@ func (s *dashboardAuthService) isLockedOut(email string) (bool, error) {
 	return lockedUntil.Valid && lockedUntil.Time.After(time.Now().UTC()), nil
 }
 
-func (s *dashboardAuthService) recordFailedAttempt(email string) error {
+func (s *dashboardService) recordFailedAttempt(email string) error {
 	var failedCount int
 	var lockedUntil sql.NullTime
 	err := s.db.QueryRow(`SELECT failed_count, locked_until FROM dashboard_login_attempts WHERE email = ?`, email).Scan(&failedCount, &lockedUntil)
@@ -396,9 +481,146 @@ func (s *dashboardAuthService) recordFailedAttempt(email string) error {
 	return err
 }
 
-func (s *dashboardAuthService) resetFailedAttempts(email string) error {
+func (s *dashboardService) resetFailedAttempts(email string) error {
 	_, err := s.db.Exec(`DELETE FROM dashboard_login_attempts WHERE email = ?`, email)
 	return err
+}
+
+func (s *dashboardService) listOrganizations(c *fiber.Ctx) error {
+	adminID := c.Locals("dashboard_admin_id").(string)
+	rows, err := s.db.Query(`
+		SELECT o.id, o.name, o.created_at
+		FROM organizations o
+		JOIN organization_members m ON m.org_id = o.id
+		WHERE m.admin_id = ?
+		ORDER BY o.created_at DESC
+	`, adminID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to load organizations"})
+	}
+	defer rows.Close()
+
+	orgs := []organization{}
+	for rows.Next() {
+		var org organization
+		if err := rows.Scan(&org.ID, &org.Name, &org.CreatedAt); err != nil {
+			continue
+		}
+		orgs = append(orgs, org)
+	}
+	return c.JSON(orgs)
+}
+
+func (s *dashboardService) createOrganization(c *fiber.Ctx) error {
+	adminID := c.Locals("dashboard_admin_id").(string)
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Organization name is required"})
+	}
+
+	orgID := randomID(12)
+	_, err := s.db.Exec(`INSERT INTO organizations(id, name) VALUES(?, ?)`, orgID, strings.TrimSpace(req.Name))
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to create organization"})
+	}
+
+	_, _ = s.db.Exec(`INSERT INTO organization_members(id, org_id, admin_id, role) VALUES(?, ?, ?, ?)`, randomID(12), orgID, adminID, "owner")
+
+	return c.Status(201).JSON(fiber.Map{"id": orgID, "name": req.Name})
+}
+
+func (s *dashboardService) listProjects(c *fiber.Ctx) error {
+	orgID := c.Params("orgId")
+	rows, err := s.db.Query(`SELECT id, org_id, name, db_name, created_at FROM projects WHERE org_id = ? ORDER BY created_at DESC`, orgID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to load projects"})
+	}
+	defer rows.Close()
+
+	projects := []project{}
+	for rows.Next() {
+		var p project
+		if err := rows.Scan(&p.ID, &p.OrgID, &p.Name, &p.DBName, &p.CreatedAt); err != nil {
+			continue
+		}
+		projects = append(projects, p)
+	}
+	return c.JSON(projects)
+}
+
+func (s *dashboardService) createProject(c *fiber.Ctx) error {
+	orgID := c.Params("orgId")
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Project name is required"})
+	}
+
+	projID := randomID(12)
+	dbName := fmt.Sprintf("lambase_%s", strings.ToLower(projID))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := s.projectDB.EnsureDatabase(ctx, dbName); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to provision project database"})
+	}
+
+	pool, err := s.projectDB.PoolFor(ctx, dbName)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to connect project database"})
+	}
+	if err := db.EnsureProjectSchemas(ctx, pool); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to initialize project schemas"})
+	}
+
+	_, err = s.db.Exec(`INSERT INTO projects(id, org_id, name, db_name) VALUES(?, ?, ?, ?)`, projID, orgID, strings.TrimSpace(req.Name), dbName)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to save project"})
+	}
+
+	anonKey := generateAPIKey("anon")
+	serviceKey := generateAPIKey("service")
+
+	_, _ = s.db.Exec(`INSERT INTO project_api_keys(id, project_id, key_name, key_value) VALUES(?, ?, ?, ?)`, randomID(12), projID, apiKeyAnon, anonKey)
+	_, _ = s.db.Exec(`INSERT INTO project_api_keys(id, project_id, key_name, key_value) VALUES(?, ?, ?, ?)`, randomID(12), projID, apiKeyServiceRole, serviceKey)
+
+	return c.Status(201).JSON(fiber.Map{
+		"id": projID,
+		"orgId": orgID,
+		"name": req.Name,
+		"dbName": dbName,
+	})
+}
+
+func (s *dashboardService) getProject(c *fiber.Ctx) error {
+	projectID := c.Params("projectId")
+	var p project
+	if err := s.db.QueryRow(`SELECT id, org_id, name, db_name, created_at FROM projects WHERE id = ?`, projectID).Scan(&p.ID, &p.OrgID, &p.Name, &p.DBName, &p.CreatedAt); err != nil {
+		return c.Status(404).JSON(fiber.Map{"error": "Project not found"})
+	}
+	return c.JSON(p)
+}
+
+func (s *dashboardService) getProjectKeys(c *fiber.Ctx) error {
+	projectID := c.Params("projectId")
+	rows, err := s.db.Query(`SELECT key_name, key_value FROM project_api_keys WHERE project_id = ?`, projectID)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": "Failed to load API keys"})
+	}
+	defer rows.Close()
+	keys := []apiKey{}
+	for rows.Next() {
+		var k apiKey
+		if err := rows.Scan(&k.KeyName, &k.KeyValue); err != nil {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	return c.JSON(keys)
 }
 
 func randomID(size int) string {
@@ -466,4 +688,9 @@ func sameOriginHostMatch(sourceHost, requestHost string) bool {
 	}
 	loopback := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
 	return loopback[strings.ToLower(sHost)] && loopback[strings.ToLower(rHost)]
+}
+
+func generateAPIKey(prefix string) string {
+	key := uuid.New().String()
+	return fmt.Sprintf("%s_%s", prefix, strings.ReplaceAll(key, "-", ""))
 }

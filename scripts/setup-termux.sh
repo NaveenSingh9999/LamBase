@@ -16,6 +16,17 @@ pkg upgrade -y
 echo "[2/8] Installing dependencies..."
 pkg install -y git curl nodejs-lts golang postgresql openssl-tool
 
+echo "[2.1/8] Ensuring pnpm is available..."
+if ! command -v pnpm >/dev/null 2>&1; then
+  if command -v corepack >/dev/null 2>&1; then
+    corepack enable || true
+    corepack prepare pnpm@9 --activate || true
+  fi
+fi
+if ! command -v pnpm >/dev/null 2>&1; then
+  npm install -g pnpm
+fi
+
 PGDATA_DIR="$PREFIX/var/lib/postgresql"
 PGLOG_DIR="$PREFIX/var/log"
 PGLOG_FILE="$PGLOG_DIR/postgresql.log"
@@ -66,4 +77,4 @@ echo "[8/8] Preparing frontend/backend artifacts..."
 
 echo "Termux setup complete."
 echo "Run LamBase with: ./lambase-bootstrap"
-echo "If PostgreSQL is not running later: pg_ctl -D \"$PGDATA_DIR\" -l \"$PGLOG_FILE\" start"
+echo "If PostgreSQL is not running later: pg_ctl -D $PREFIX/var/lib/postgresql -l $PREFIX/var/log/postgresql.log start"

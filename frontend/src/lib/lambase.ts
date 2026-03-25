@@ -58,33 +58,69 @@ export const api = {
     session: () => request('/api/v1/dashboard-auth/session'),
     signout: () => request('/api/v1/dashboard-auth/signout', { method: 'POST' }),
   },
-  db: {
-    list: (table: string) => request(`/api/v1/db/${table}`),
-    insert: (table: string, data: object) =>
-      request(`/api/v1/db/${table}`, {
+  orgs: {
+    list: () => request('/api/v1/orgs'),
+    create: (name: string) =>
+      request('/api/v1/orgs', {
         method: 'POST',
-        body: JSON.stringify(data),
-      }),
-    update: (table: string, id: string, data: object) =>
-      request(`/api/v1/db/${table}/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify(data),
-      }),
-    delete: (table: string, id: string) =>
-      request(`/api/v1/db/${table}/${id}`, {
-        method: 'DELETE',
+        body: JSON.stringify({ name }),
       }),
   },
-  schema: {
-    tables: () => request('/api/v1/schema/tables'),
-    create: (name: string, columns: unknown[]) =>
-      request('/api/v1/schema/tables', {
+  projects: {
+    list: (orgId: string) => request(`/api/v1/orgs/${orgId}/projects`),
+    create: (orgId: string, name: string) =>
+      request(`/api/v1/orgs/${orgId}/projects`, {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    get: (projectId: string) => request(`/api/v1/projects/${projectId}`),
+    apiKeys: (projectId: string) => request(`/api/v1/projects/${projectId}/api-keys`),
+    schemas: (projectId: string) => request(`/api/v1/projects/${projectId}/schemas`),
+    tables: (projectId: string, schema: string) =>
+      request(`/api/v1/projects/${projectId}/schemas/${schema}/tables`),
+    createTable: (projectId: string, schema: string, name: string, columns: unknown[]) =>
+      request(`/api/v1/projects/${projectId}/schemas/${schema}/tables`, {
         method: 'POST',
         body: JSON.stringify({ name, columns }),
       }),
-    drop: (name: string) =>
-      request(`/api/v1/schema/tables/${name}`, {
+    dropTable: (projectId: string, schema: string, table: string) =>
+      request(`/api/v1/projects/${projectId}/schemas/${schema}/tables/${table}`, {
         method: 'DELETE',
+      }),
+    columns: (projectId: string, schema: string, table: string) =>
+      request(`/api/v1/projects/${projectId}/schemas/${schema}/tables/${table}/columns`),
+    relationships: (projectId: string, schema: string, table: string) =>
+      request(`/api/v1/projects/${projectId}/schemas/${schema}/tables/${table}/relationships`),
+    createRelationship: (
+      projectId: string,
+      schema: string,
+      table: string,
+      payload: { column: string; foreignSchema?: string; foreignTable: string; foreignColumn: string }
+    ) =>
+      request(`/api/v1/projects/${projectId}/schemas/${schema}/tables/${table}/relationships`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    listRows: (projectId: string, schema: string, table: string) =>
+      request(`/api/v1/projects/${projectId}/db/${schema}/${table}`),
+    insertRow: (projectId: string, schema: string, table: string, data: object) =>
+      request(`/api/v1/projects/${projectId}/db/${schema}/${table}`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    updateRow: (projectId: string, schema: string, table: string, id: string, data: object) =>
+      request(`/api/v1/projects/${projectId}/db/${schema}/${table}/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    deleteRow: (projectId: string, schema: string, table: string, id: string) =>
+      request(`/api/v1/projects/${projectId}/db/${schema}/${table}/${id}`, {
+        method: 'DELETE',
+      }),
+    sql: (projectId: string, query: string) =>
+      request(`/api/v1/projects/${projectId}/sql`, {
+        method: 'POST',
+        body: JSON.stringify({ query }),
       }),
   },
 }

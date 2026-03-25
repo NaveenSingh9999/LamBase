@@ -9,8 +9,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
-	"github.com/lambase/lambase/api"
 	"github.com/lambase/lambase/config"
+	"github.com/lambase/lambase/db"
 )
 
 func NewServer(cfg *config.Config, staticFS embed.FS) *fiber.App {
@@ -19,12 +19,15 @@ func NewServer(cfg *config.Config, staticFS embed.FS) *fiber.App {
 		DisableStartupMessage: true,
 	})
 
-	authService, err := newDashboardAuthService(cfg)
+	projectDB := db.NewProjectDBManager(cfg.DatabaseURL)
+
+	service, err := newDashboardService(cfg, projectDB)
 	if err != nil {
 		log.Fatal("Failed to initialize dashboard auth:", err)
 	}
 	app.Hooks().OnShutdown(func() error {
-		authService.close()
+		service.close()
+		projectDB.CloseAll()
 		return nil
 	})
 
@@ -35,13 +38,13 @@ func NewServer(cfg *config.Config, staticFS embed.FS) *fiber.App {
 	}))
 
 	// Public dashboard auth routes
-	authService.registerRoutes(app)
+	service.registerAuthRoutes(app)
 
 	// Protected dashboard APIs
-	protected := app.Group("/api/v1", authService.requireDashboardSession)
-	protected.Use(authService.requireCSRFFromSession)
-	RegisterSchemaRoutes(protected)
-	api.RegisterDBRoutes(protected)
+	protected := app.Group("/api/v1", service.requireDashboardSession)
+	protected.Use(service.requireCSRFFromSession)
+	service.registerOrgRoutes(protected)
+	service.registerProjectRoutes(protected)
 
 	// Serve Embedded Frontend
 	// dist/ folder inside embed.FS

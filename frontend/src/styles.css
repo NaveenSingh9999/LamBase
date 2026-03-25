@@ -1,15 +1,20 @@
-:root {
-  --bg: #070907;
-  --surface: #0f130f;
-  --surface-soft: #121813;
-  --text: #eaf5e8;
-  --muted: #8ea38f;
-  --accent: #b7ff2f;
-  --accent-soft: #2a3a16;
-  --border: #233025;
-  --danger: #ff5468;
-  --radius: 16px;
-  --radius-sm: 10px;
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Syne:wght@500;700;800&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #070b08;
+  --color-bg-soft: #0d120f;
+  --color-panel: #121914;
+  --color-panel-soft: #181f19;
+  --color-border: #273229;
+  --color-text: #e8f1e4;
+  --color-muted: #8f9f91;
+  --color-accent: #befa2f;
+  --color-accent-soft: #2d3a12;
+  --color-danger: #ff6577;
+  --font-display: "Syne", sans-serif;
+  --font-body: "Plus Jakarta Sans", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
 }
 
 * {
@@ -19,242 +24,40 @@
 html,
 body,
 #root {
-  margin: 0;
   min-height: 100%;
-  background:
-    radial-gradient(circle at 20% -20%, rgba(183, 255, 47, 0.12), transparent 35%),
-    radial-gradient(circle at 90% 120%, rgba(183, 255, 47, 0.08), transparent 40%),
-    var(--bg);
-  color: var(--text);
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
-.loading-screen {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  gap: 12px;
-  color: var(--muted);
-}
-
-.pulse {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  border: 2px solid var(--accent-soft);
-  border-top-color: var(--accent);
-  animation: spin 0.9s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.auth-page {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  position: relative;
-  overflow: hidden;
-  padding: 24px;
-}
-
-.auth-ambient {
-  position: absolute;
-  inset: 0;
-  background:
-    conic-gradient(from 170deg at 70% 20%, rgba(183, 255, 47, 0.1), transparent 20%, rgba(183, 255, 47, 0.06) 40%, transparent 60%),
-    linear-gradient(155deg, rgba(183, 255, 47, 0.06), transparent 45%);
-  filter: blur(20px);
-}
-
-.auth-card {
-  z-index: 1;
-  width: min(520px, 95vw);
-  background: linear-gradient(150deg, rgba(18, 24, 19, 0.95), rgba(12, 15, 13, 0.96));
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 28px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  display: grid;
-  gap: 12px;
-  transform: translateY(0);
-  animation: reveal 320ms ease;
-}
-
-@keyframes reveal {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.auth-card .eyebrow {
-  color: var(--accent);
-  text-transform: uppercase;
-  letter-spacing: 0.09em;
-  font-size: 11px;
-}
-
-.auth-card h2 {
+body {
   margin: 0;
-  font-size: clamp(24px, 3vw, 32px);
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background:
+    radial-gradient(circle at 10% -20%, rgba(190, 250, 47, 0.12), transparent 35%),
+    radial-gradient(circle at 90% 130%, rgba(190, 250, 47, 0.07), transparent 35%),
+    var(--color-bg);
 }
 
-.auth-card p {
-  margin-top: 0;
-  color: var(--muted);
+.frosted {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
-.auth-card label {
-  font-size: 13px;
-  color: var(--muted);
+.scrollbar-subtle::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
 }
 
-.auth-card input {
-  width: 100%;
-  border: 1px solid var(--border);
-  background: #0b100c;
-  color: var(--text);
-  border-radius: var(--radius-sm);
-  height: 46px;
-  padding: 0 12px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.auth-card input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(183, 255, 47, 0.15);
-}
-
-.password-hint {
-  display: grid;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.password-hint .meter {
-  width: 100%;
-  height: 6px;
+.scrollbar-subtle::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: #1a241b;
-  overflow: hidden;
+  background: rgba(143, 159, 145, 0.28);
 }
 
-.password-hint .meter div {
-  height: 100%;
-  background: linear-gradient(90deg, #7ebf1f, var(--accent));
-  transition: width 0.2s ease;
-}
-
-.auth-error {
-  background: rgba(255, 84, 104, 0.12);
-  border: 1px solid rgba(255, 84, 104, 0.36);
-  color: #ffc4cd;
-  font-size: 13px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-}
-
-.auth-card button,
-.ghost-btn {
-  height: 44px;
-  border-radius: 12px;
-  border: none;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform 0.1s ease, opacity 0.15s ease;
-}
-
-.auth-card button {
-  background: linear-gradient(110deg, var(--accent), #94da17);
-  color: #071004;
-}
-
-.auth-card button:active,
-.ghost-btn:active {
-  transform: translateY(1px);
-}
-
-.auth-card button:disabled,
-.ghost-btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.dash-shell {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 280px 1fr;
-}
-
-.dash-nav {
-  border-right: 1px solid var(--border);
-  padding: 30px 22px;
-  display: grid;
-  align-content: start;
-  gap: 26px;
-  background: rgba(10, 14, 11, 0.9);
-}
-
-.dash-nav h1 {
-  margin: 0;
-  color: var(--accent);
-}
-
-.dash-nav p {
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
-.dash-nav ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-}
-
-.dash-nav a,
-.dash-nav span {
-  color: var(--text);
-  text-decoration: none;
-  padding: 10px 12px;
-  border-radius: 10px;
-  display: block;
-  background: rgba(20, 26, 21, 0.8);
-}
-
-.ghost-btn {
-  background: transparent;
-  color: var(--muted);
-  border: 1px solid var(--border);
-}
-
-.dash-main {
-  padding: 34px;
-}
-
-@media (max-width: 900px) {
-  .dash-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .dash-nav {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .dash-main {
-    padding: 18px;
-  }
+@keyframes shake {
+  0% { transform: translateX(0); }
+  16% { transform: translateX(-4px); }
+  33% { transform: translateX(4px); }
+  50% { transform: translateX(-3px); }
+  66% { transform: translateX(3px); }
+  83% { transform: translateX(-2px); }
+  100% { transform: translateX(0); }
 }
